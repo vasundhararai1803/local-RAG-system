@@ -3,13 +3,16 @@ import glob
 from dotenv import load_dotenv
 
 from langchain_community.document_loaders import TextLoader, PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
 from langchain_chroma import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.retrievers import ContextualCompressionRetriever
+from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 
 def load_documents(directory_path):
     documents = []
@@ -32,28 +35,51 @@ def main():
 
     print("Loading documents from ./data...")
     documents = load_documents("./data")
-    if not documents:
-        print("No valid documents found in ./data.")
-        return
-
-    print(f"Loaded {len(documents)} document(s).")
-    
-    print("Splitting documents into chunks...")
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=400)
-    splits = text_splitter.split_documents(documents)
-    print(f"Created {len(splits)} chunks.")
-
     print("Initializing embeddings and Chroma DB...")
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+    import chromadb
+    client = chromadb.PersistentClient(path="./chroma_db")
+    collection_exists = False
+    try:
+        client.get_collection('langchain')
+        collection_exists = True
+    except Exception:
+        pass
+
+    if not documents and not collection_exists:
+        print("No valid documents found in ./data and no existing database found.")
+        print("Please add documents to ./data first.")
+        return
+
+    if documents:
+        print(f"Loaded {len(documents)} document(s).")
+        print("Splitting documents into chunks...")
+        text_splitter = SemanticChunker(embeddings, breakpoint_threshold_type="percentile", breakpoint_threshold_amount=90)
+        splits = text_splitter.split_documents(documents)
+        print(f"Created {len(splits)} chunks.")
+
+        # Initialize Chroma, storing data to disk in ./chroma_db
+        vectorstore = Chroma.from_documents(
+            documents=splits, 
+            embedding=embeddings, 
+            persist_directory="./chroma_db"
+        )
+    else:
+        print("Loading existing Chroma database...")
+        vectorstore = Chroma(
+            persist_directory="./chroma_db",
+            embedding_function=embeddings
+        )
     
-    # Initialize Chroma, storing data to disk in ./chroma_db
-    vectorstore = Chroma.from_documents(
-        documents=splits, 
-        embedding=embeddings, 
-        persist_directory="./chroma_db"
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+
+    print("Setting up reranker...")
+    model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    compressor = CrossEncoderReranker(model=model, top_n=3)
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=retriever
     )
-    
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
     print("Setting up retrieval chain...")
     llm = ChatOllama(model="llama3.2", temperature=0.0, num_ctx=4096)
@@ -77,7 +103,7 @@ def main():
     ])
 
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+    rag_chain = create_retrieval_chain(compression_retriever, question_answer_chain)
 
     print("\n" + "="*40)
     print("      RAG System Initialized")
@@ -95,6 +121,16 @@ def main():
             
             response = rag_chain.invoke({"input": user_input})
             print(f"\nAnswer: {response['answer']}")
+            
+            if "context" in response and response["context"]:
+                print("\n--- Sources Cited ---")
+                for i, doc in enumerate(response["context"], 1):
+                    source = doc.metadata.get("source", "Unknown Source")
+                    page = doc.metadata.get("page")
+                    src_str = f"{source} (Page {page})" if page is not None else f"{source}"
+                    preview = doc.page_content[:150].replace("\n", " ") + "..."
+                    print(f"{i}. {src_str}")
+                    print(f"   Preview: {preview}")
         except KeyboardInterrupt:
             print("\nExiting...")
             break
