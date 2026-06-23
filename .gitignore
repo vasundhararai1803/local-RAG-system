@@ -3,4 +3,4 @@ __pycache__/
 chroma_db/
 .chronos/
 .DS_Store
-.env
+.envdata/
