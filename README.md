@@ -60,7 +60,7 @@ streamlit run ui.py --server.fileWatcherType none
 
 Navigate to `http://localhost:8501` in your browser.
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 ├── .venv/                  # Virtual environment
