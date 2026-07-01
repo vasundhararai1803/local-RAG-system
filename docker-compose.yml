@@ -23,7 +23,7 @@ services:
     build: .
     container_name: rag_application
     ports:
-      - "8501:8501"
+      - "8502:8501"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - VECTOR_STORE_URL=http://qdrant:6333

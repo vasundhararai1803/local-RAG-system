@@ -1,139 +1,137 @@
 import streamlit as st
 import os
-import uuid
 from src.engine import LocalRAGEngine
 from src.exceptions import OffTopicException
+from langchain_core.messages import HumanMessage, AIMessage
 
-# 1. Page Configuration & Custom CSS Injection
-st.set_page_config(page_title="Enterprise Local RAG", layout="wide")
+# 1. Page Configuration & Custom CSS Injection to look like Gemini
+st.set_page_config(page_title="Gemini Clone", layout="wide")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #F8F9FA; color: #1A1D20; }
-    [data-testid="stSidebar"] { background-color: #FFFFFF; border-right: 1px solid #E9ECEF; }
-    .stChatMessage { border-radius: 12px; background-color: #FFFFFF; margin-bottom: 10px; padding: 15px; border: 1px solid #E9ECEF; }
-    .user-card { background-color: #F1F5F9; border: 1px solid #CBD5E1; padding: 15px; border-radius: 12px; margin-left: auto; max-width: 80%; }
-    .file-chip { background-color: #E2E8F0; border-radius: 20px; padding: 4px 12px; display: inline-block; font-size: 0.8rem; margin-bottom: 8px; color: #475569; }
+    /* Gemini-like styling */
+    .stApp { background-color: #ffffff; color: #1f1f1f; font-family: 'Google Sans', sans-serif; }
+    .stChatMessage { border-radius: 20px; margin-bottom: 15px; padding: 15px; border: none; }
+    .stChatMessage.user { background-color: #f0f4f9; margin-left: auto; border-bottom-right-radius: 4px; max-width: 80%; }
+    .stChatMessage.assistant { background-color: transparent; }
+    [data-testid="stChatMessageContent"] { font-size: 16px; line-height: 1.5; }
+    /* Hide the top header */
+    header { visibility: hidden; }
+    .file-chip { background-color: #e3e3e3; border-radius: 16px; padding: 6px 12px; display: inline-block; font-size: 0.85rem; margin-bottom: 8px; color: #1f1f1f; font-weight: 500; }
+    
+    /* Modify sidebar */
+    [data-testid="stSidebar"] { background-color: #f8f9fa; border-right: none; }
     </style>
 """, unsafe_allow_html=True)
 
 # Initialize Session State
-if "session_id" not in st.session_state:
-    st.session_state.session_id = uuid.uuid4().hex
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "active_files" not in st.session_state:
-    st.session_state.active_files = set()
+    st.session_state["messages"] = []
+if "chat_history" not in st.session_state:
+    st.session_state["chat_history"] = []
+if "uploaded_filenames" not in st.session_state:
+    st.session_state["uploaded_filenames"] = set()
 
-# Sidebar Setup & Active Context Library
-st.sidebar.title("Settings")
-st.sidebar.markdown("### Active Context")
-if st.session_state.active_files:
-    for f in st.session_state.active_files:
-        st.sidebar.markdown(f"- {f}")
-    if st.sidebar.button("Clear Vector Database", use_container_width=True):
-        st.session_state.active_files.clear()
-        st.session_state.session_id = uuid.uuid4().hex
-        st.session_state.messages = []
-        st.rerun()
-else:
-    st.sidebar.info("No documents ingested yet.")
-st.sidebar.markdown("---")
-
-# Instantiate Engine safely
+# Instantiate Engine safely with history_aware=True and persistent session_id
 @st.cache_resource
-def get_engine(session_id: str):
-    return LocalRAGEngine(session_id=session_id)
+def get_engine():
+    # Use a persistent session ID so PDFs aren't lost across reloads/new chats
+    return LocalRAGEngine(session_id="global_user_session", history_aware=True)
 
 try:
-    engine = get_engine(st.session_state.session_id)
-except Exception:
-    st.error("Could not connect to backend vector database or LLM services. Please verify Docker containers are running.")
+    engine = get_engine()
+except Exception as e:
+    st.error(f"Could not connect to backend vector database or LLM services. Error: {e}")
     st.stop()
 
-# Header Display
-st.title("Local Enterprise RAG Platform")
-st.caption(f"Session Token Secured: `{st.session_state.session_id}`")
-st.markdown("---")
+# Load already existing files from the engine's user_data_dir
+if not st.session_state.get("files_loaded_initially"):
+    if os.path.exists(engine.user_data_dir):
+        for f in os.listdir(engine.user_data_dir):
+            if os.path.isfile(os.path.join(engine.user_data_dir, f)):
+                st.session_state["uploaded_filenames"].add(f)
+    st.session_state["files_loaded_initially"] = True
 
-# Render Timeline
-clicked_prompt = None
-if not st.session_state.messages:
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    st.markdown("### Welcome to Local Enterprise RAG")
-    st.markdown("Select a starter prompt or type your own below.")
-    col1, col2, col3 = st.columns(3)
-    if col1.button("Summarize key findings", use_container_width=True):
-        clicked_prompt = "Summarize the key findings in the documents."
-    if col2.button("Extract financial data", use_container_width=True):
-        clicked_prompt = "Extract any financial data and format as a table."
-    if col3.button("Find action items", use_container_width=True):
-        clicked_prompt = "List all action items mentioned in the text."
+# Sidebar for Chat Management
+with st.sidebar:
+    if st.button("➕ New chat", use_container_width=True):
+        st.session_state["messages"] = []
+        st.session_state["chat_history"] = []
+        st.rerun()
+        
+    st.markdown("### Context Library")
+    if st.session_state["uploaded_filenames"]:
+        for f in st.session_state["uploaded_filenames"]:
+            st.markdown(f"📄 `{f}`")
+    else:
+        st.markdown("<span style='color: #64748B; font-size: 0.9em;'>*No documents loaded yet.*</span>", unsafe_allow_html=True)
+
+# Main Chat Interface
+if not st.session_state["messages"]:
+    st.markdown("<h1 style='text-align: center; color: #444746; margin-top: 5vh; font-size: 3rem;'>Hello</h1>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #c4c7c5; margin-bottom: 10vh;'>How can I help you today?</h2>", unsafe_allow_html=True)
 else:
-    for msg in st.session_state.messages:
+    for msg in st.session_state["messages"]:
         with st.chat_message(msg["role"]):
             if msg["role"] == "user":
-                for f in msg.get("files", []):
-                    st.caption(f"File: {f}")
+                if msg.get("files"):
+                    for f in msg["files"]:
+                        st.markdown(f"<div class='file-chip'>📎 {f}</div>", unsafe_allow_html=True)
                 st.markdown(msg["content"])
             else:
                 st.markdown(msg["content"])
                 if "sources" in msg and msg["sources"]:
-                    with st.expander("View Grounding Sources"):
+                    with st.expander("Sources"):
                         for i, doc_text in enumerate(msg["sources"][:3]):
                             st.markdown(f"**Source {i+1}**")
                             st.info(doc_text[:300] + "...")
 
 # Bottom Command Interface Tray
-st.markdown("<br><br>", unsafe_allow_html=True)
-with st.container():
-    st.markdown("### Context Control & Prompt Execution")
+uploaded_files = st.file_uploader(
+    "Upload context files (PDF, TXT, DOCX, MD, HTML)", 
+    accept_multiple_files=True, 
+    label_visibility="collapsed"
+)
+
+prompt_data = st.chat_input("Ask me anything...")
+
+if prompt_data:
+    active_filenames = []
     
-    # --- FIX: Remove the invalid accept_file parameter entirely ---
-    uploaded_files = st.file_uploader(
-        "Drop context files here to ingest into your secure Qdrant session container", 
-        accept_multiple_files=True, 
-        label_visibility="collapsed"
-    )
-
-    # Keep chat_input standard and clean
-    prompt_data = st.chat_input("Ask a question about your local documents...")
-
-    if prompt_data or clicked_prompt:
-        active_filenames = []
-        prompt_text = prompt_data if prompt_data else clicked_prompt
+    # Process files if staged
+    if uploaded_files:
+        for f in uploaded_files:
+            active_filenames.append(f.name)
+            st.session_state["uploaded_filenames"].add(f.name)
+            try:
+                file_path = os.path.join(engine.user_data_dir, f.name)
+                with open(file_path, "wb") as f_out:
+                    f_out.write(f.read())
+            except Exception as e:
+                st.error(f"Failed to save file {f.name}: {str(e)}")
+                st.stop()
         
-        # 1. Process files instantly if staged
-        if uploaded_files:
-            for f in uploaded_files:
-                active_filenames.append(f.name)
-                st.session_state.active_files.add(f.name)
-                try:
-                    file_path = os.path.join(engine.user_data_dir, f.name)
-                    with open(file_path, "wb") as f_out:
-                        f_out.write(f.read())
-                except Exception as e:
-                    st.error(f"Failed to save file {f.name}: {str(e)}")
-                    st.stop()
-            
-            # Re-run the engine's ingestion pipeline
+        # Re-run the engine's ingestion pipeline
+        with st.spinner("Processing documents..."):
             engine.vectorstore = engine._load_and_verify_documents()
             if engine.vectorstore != "NO_DOCS":
-                engine.retriever = engine.vectorstore.as_retriever(search_kwargs={"k": 3}) # defaulting k
+                engine.retriever = engine.vectorstore.as_retriever(
+                    search_type="mmr",
+                    search_kwargs={"k": 3, "fetch_k": 9, "lambda_mult": 0.6}
+                )
                 engine._setup_lcel_graph()
-                    
-        # 2. Commit user state instantly to screen canvas
-        if prompt_text or active_filenames:
-            st.session_state.messages.append({
-                "role": "user",
-                "content": prompt_text,
-                "files": active_filenames
-            })
-            st.rerun()
+                
+    st.session_state["messages"].append({
+        "role": "user",
+        "content": prompt_data,
+        "files": active_filenames
+    })
+    
+    st.rerun()
 
 # Execute model text inference streaming if user just updated the message timeline
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    last_prompt = st.session_state.messages[-1]["content"]
+if st.session_state["messages"] and st.session_state["messages"][-1]["role"] == "user":
+    last_prompt = st.session_state["messages"][-1]["content"]
     
     with st.chat_message("assistant"):
         placeholder = st.empty()
@@ -141,8 +139,13 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         context_docs = []
         
         try:
-            with st.spinner("Analyzing isolated Qdrant vector space..."):
-                for chunk in engine.stream({"input": last_prompt}):
+            inputs = {
+                "input": last_prompt,
+                "chat_history": st.session_state["chat_history"]
+            }
+            
+            with st.spinner("Thinking..."):
+                for chunk in engine.stream(inputs):
                     if "context" in chunk:
                         context_docs.extend(chunk["context"])
                     if "answer" in chunk:
@@ -152,14 +155,26 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             
             sources = []
             if context_docs:
-                with st.expander("View Grounding Sources"):
+                with st.expander("Sources"):
                     for i, doc in enumerate(context_docs[:3]):
                         st.markdown(f"**Source {i+1}**")
                         st.info(doc.page_content[:300] + "...")
                         sources.append(doc.page_content)
                         
-            st.session_state.messages.append({"role": "assistant", "content": full_response, "sources": sources})
+            st.session_state["messages"].append({"role": "assistant", "content": full_response, "sources": sources})
+            
+            # Update chat history
+            st.session_state["chat_history"].extend([
+                HumanMessage(content=last_prompt),
+                AIMessage(content=full_response)
+            ])
+            
         except OffTopicException:
             placeholder.warning("This query is outside the scope of your ingested document context bounds.")
+            st.session_state["messages"].append({"role": "assistant", "content": "This query is outside the scope of your ingested document context bounds."})
+            st.session_state["chat_history"].extend([
+                HumanMessage(content=last_prompt),
+                AIMessage(content="This query is outside the scope of your ingested document context bounds.")
+            ])
         except Exception as e:
-            placeholder.error(f"Network Connection Lost during live stream: {str(e)}")
+            placeholder.error(f"Error: {str(e)}")

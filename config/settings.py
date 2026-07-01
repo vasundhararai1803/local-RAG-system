@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     # Core Directories & Connections
     data_dir: str = "./data"
     vector_store_url: str = "http://localhost:6333"
+    ollama_base_url: str = "http://localhost:11434"
 
     # Embeddings & Retrieval
     embedding_model: str = "all-MiniLM-L6-v2"

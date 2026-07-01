@@ -53,7 +53,7 @@ class LocalRAGEngine:
             
         self.vectorstore = self._load_and_verify_documents()
         self.cross_encoder = HuggingFaceCrossEncoder(model_name=settings.reranker_model)
-        self.llm = ChatOllama(model=settings.llm_model, temperature=settings.llm_temperature, num_ctx=settings.llm_num_ctx)
+        self.llm = ChatOllama(model=settings.llm_model, base_url=settings.ollama_base_url, temperature=settings.llm_temperature, num_ctx=settings.llm_num_ctx)
         
         if self.vectorstore != "NO_DOCS":
             self.retriever = self.vectorstore.as_retriever(
@@ -61,7 +61,7 @@ class LocalRAGEngine:
                 search_kwargs={
                     "k": settings.retriever_k,
                     "fetch_k": settings.retriever_k * 3,
-                    "lambda_mult": 0.5
+                    "lambda_mult": 0.6
                 }
             )
             self._setup_lcel_graph()
@@ -166,6 +166,7 @@ class LocalRAGEngine:
             collection_name=self.session_id,
             embedding=self.embeddings,
             sparse_embedding=self.sparse_embeddings,
+            sparse_vector_name="sparse",
             retrieval_mode=RetrievalMode.HYBRID,
         )
             
@@ -259,3 +260,34 @@ class LocalRAGEngine:
         prompt_val = self.get_qa_prompt(inputs)
         for chunk in self.llm.stream(prompt_val):
             yield {"answer": chunk.content}
+
+    def delete_document(self, filename: str) -> bool:
+        """Deletes a document from the Qdrant vector database using a metadata filter."""
+        file_path = os.path.join(self.user_data_dir, filename)
+        try:
+            # Drop points where metadata.source exactly matches the file path
+            self.qdrant_client.delete(
+                collection_name=self.session_id,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="metadata.source",
+                                match=models.MatchValue(value=file_path)
+                            )
+                        ]
+                    )
+                )
+            )
+            logger.info(f"Successfully deleted {filename} from collection {self.session_id}.")
+            
+            # Check if the collection is now empty
+            collection_info = self.qdrant_client.get_collection(self.session_id)
+            if collection_info.points_count == 0:
+                self.vectorstore = "NO_DOCS"
+                logger.info(f"Collection {self.session_id} is now empty.")
+                
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete document {filename} from Qdrant: {str(e)}")
+            return False
